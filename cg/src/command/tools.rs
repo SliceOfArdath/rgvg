@@ -1,6 +1,9 @@
-use super::framework::{Entry, SourceFormatter, Name, Argument, DefaultValue, Convertible};
+use super::framework::{Entry, SourceFormatter, Name, Argument, DefaultValue, Convertible, Transformable};
 use super::Args;
+use std::collections::{BTreeSet};
 
+
+#[derive(Clone)] 
 pub struct Grepper {
     /// A regular expression used for searching.
     regex_pattern: Entry,
@@ -16,7 +19,7 @@ pub const GREP: Grepper = Grepper {
         target_type: Argument::Text(None),
     },
     file: Entry {
-        defaults_to: DefaultValue::Default("-"),
+        defaults_to: DefaultValue::Skip,
         source: SourceFormatter::Default,
         target_name: Name::Blank(1),
         target_type: Argument::PathPattern(None),
@@ -35,7 +38,14 @@ impl Convertible<Args> for Grepper {
     ///     then throw all the non-ordered ones after.
     ///   To optimize the whole thing, we generate the arguments in the same time;
     ///     throw the non-positionals in a vec, and the positionals in a tree. 
+    fn populate(&self, with: Args) -> BTreeSet<Entry> {
+        return BTreeSet::new();
+    }
     fn generate(&self, with: Args) -> Vec<String> {
-        return Vec::new();
+        let mut r: Vec<String> = Vec::new();
+
+        r.extend(self.regex_pattern.clone().transform(&with.regex_pattern));
+        r.extend(self.file.clone().transform(&with.file));
+        return r;
     }
 }

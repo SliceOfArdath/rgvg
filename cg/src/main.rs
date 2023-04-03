@@ -45,6 +45,8 @@ fn finish(last: Child) -> Result<Output, io::Error> {
 
 use regex::Regex;
 
+use crate::command::framework::Convertible;
+
 fn rc<'a>(cap: &Option<regex::Match<'a>>) -> &'a str {
     match cap {
         Some(x) => {
@@ -73,6 +75,8 @@ fn main() {
             rc(&cap.name("t1")),
             rc(&cap.name("t2")));
     }
-    //let args = command::Args::parse();
-    //println!("{:?}", args);
+    let args = command::Args::parse();
+    println!("{:?}", args);
+    let q = command::tools::GREP.generate(args);
+    println!("{:?}", q);
 }

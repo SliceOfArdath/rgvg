@@ -1,7 +1,7 @@
-mod framework;
+pub mod framework;
 pub mod tools;
 
-use clap::{Parser, command, ArgGroup};
+use clap::{Parser, command};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -9,7 +9,7 @@ use std::path::PathBuf;
 pub struct Args {
     /// The regular expression used for searching.
     #[arg(required=true,value_name="PATTERN")]
-    pattern: String,
+    regex_pattern: String,
     /// The file or directory to search.
     #[arg(value_name="PATH")]
     file: Option<PathBuf>,

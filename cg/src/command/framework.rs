@@ -1,9 +1,11 @@
+use std::collections::{BTreeSet};
 use std::path::PathBuf;
 use std::fmt::{self, Display};
 use regex::Regex;
 
 type Index = u8;
 
+#[derive(Clone)]
 /// A name of the form -<short> or --<long>. The name sent as a command. Short and long as thus mutually excusive here.
 pub enum Name {
     /// A short name, format -<short>, i.e. -j
@@ -44,8 +46,16 @@ impl TryFrom<(regex::Match<'_>, &str)> for Name {
         } 
     }
 }
+impl Name {
+    fn name(&self, v: Vec<String>) -> Vec<String> {
+        match self {
+            Name::Blank(_) => v,
+            _ => panic!("Unsupported conversion!"),
+        }
+    }
+}
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Argument {
     /// A collection type. Hopefully.
     CollectionText(Option<Vec<String>>),
@@ -57,49 +67,17 @@ pub enum Argument {
     Text(Option<String>),
     /// Either there or not.. What do the stars say, my dear pippin, what do they say? - That we fight the good cause, merry. That we will see each other in the end.
     BooleanFlag(Option<bool>),
-    /// Skip this entry. Useless?
-    Undefined,
+
 }
 
-pub trait Transformable {
-    /// Turn the clap data into valid arguments
-    fn transform(self, transformer: &Entry) -> Self;
-    /// Prepare the argument for command start.
-    ///  This does not process collections by itself!
-    fn convert(self) -> Option<String>;
+trait Transform<T> {
+    fn transform(&mut self, value: &T);
 }
-pub trait Transform<T> {
-    fn transform(self, value: T) -> Self;
-    fn convert(self) -> Option<T>;
+trait Generate {
+    /// Vec and not option, because of collection arguments.
+    fn generate(self) -> Vec<String>;
 }
 
-impl Transformable for Argument {
-    fn transform(self, transformer: &Entry) -> Argument {
-        match self {
-            Argument::BooleanFlag(x) => match transformer.target_type {
-                Argument::BooleanFlag(None) => Argument::BooleanFlag(x),
-                _ => panic!("Unsupported conversion: BooleanFlag to {:?}", transformer.target_type),
-            }
-            Argument::Text(x) => match transformer.target_type {
-                Argument::Text(None) => Argument::Text(x),
-                _ => panic!("Unsupported conversion: Text to {:?}", transformer.target_type),
-            },
-            Argument::PathPattern(x) => match transformer.target_type {
-                Argument::PathPattern(None) => Argument::PathPattern(x),
-                _ => panic!("Unsupported conversion: PathPattern to {:?}", transformer.target_type),
-            }
-            _ => panic!("Unsupported type: {:?}", self),
-        }
-    }
-    fn convert(self) -> Option<String> {
-        match self {
-            Argument::BooleanFlag(x) => Some(x?.to_string()),
-            Argument::Text(x) => x, //that's a string!
-            Argument::PathPattern(x) => Some(x?.display().to_string()),
-            _ => panic!("Unsupported type: {:?}", self),
-        }
-    }
-}
 impl From<String> for Argument {
     fn from(value: String) -> Self {
         return Argument::Text(Some(value));
@@ -110,50 +88,121 @@ impl From<PathBuf> for Argument {
         return Argument::PathPattern(Some(value));
     }
 }
-/*impl Transform<String> for Entry {
-    fn transform(&mut self, value: String) {
-        self.target_type = match &self.target_type {
-            Argument::Text(None) => Argument::Text(Some(value)),
+impl From<&'static str> for Argument {
+    fn from(value: &'static str) -> Self {
+        return Argument::Text(Some(value.to_string()));
+    }
+}
+
+impl Transform<String> for Argument {
+    fn transform(&mut self, value: &String) {
+        match self {
+            Argument::Text(x) => {*x = Some(value.to_string())},
             _ => panic!("Unspported transformation!")
         }
     }
-}*/
-impl Transform<String> for Argument {
-    fn transform(self, value: String) -> Self {
+}
+impl Transform<PathBuf> for Argument {
+    fn transform(&mut self, value: &PathBuf) {
         match self {
-            Argument::Text(None) => Argument::Text(Some(value)),
+            Argument::PathPattern(x) => {*x = Some(value.to_path_buf())},
+            Argument::Text(x) => {*x = Some(value.display().to_string())},
+            _ => panic!("Unspported transformation!")
+        }
+    }
+}
+impl Transform<bool> for Argument {
+    fn transform(&mut self, value: &bool) {
+        match self {
+            Argument::BooleanFlag(x) => {*x = Some(*value)},
+            Argument::Text(x) => {*x = Some(value.to_string())},
+            _ => panic!("Unspported transformation!")
+        }
+    }
+}
+impl Transform<Option<PathBuf>> for Argument {
+    fn transform(&mut self, value: &Option<PathBuf>) {
+        match self {
+            Argument::PathPattern(x) => match value {
+                Some(p) => {*x = Some(p.to_path_buf())},
+                None => {*x = None},
+            },
+            Argument::Text(x) => match value {
+                Some(p) => {*x = Some(p.display().to_string())},
+                None => {*x = None},
+            },
             _ => panic!("Unspported transformation!")
         }
     }
 }
 
-/*impl Argument {
-    pub const fn new(data: &str) -> Self {
-        match data {
-            "str" => Argument::Text(None),
-            "path" => Argument::PathPattern(None),
-            "path*" => Argument::CollectionPathPattern(None),
-            _ => panic!("Invalid type!"),
+
+impl Generate for Argument {
+    fn generate(self) -> Vec<String> {
+        match self {
+            Argument::BooleanFlag(x) => optional_vectorization(x),
+            Argument::Text(x) => optional_vectorization(x), //that's a string!
+            Argument::PathPattern(x) => optional_vectorization(x),
+            _ => panic!("Unsupported type: {:?}", self),
         }
     }
-}*/
+}
 
+trait Vectorize
+    where Self: Sized {
+    fn vec(self) -> Vec<String>;
+}
+fn optional_vectorization<T: Vectorize>(v: Option<T>) -> Vec<String> {
+    match v {
+        Some(n) => n.vec(),
+        None => Vec::new(),
+    }
+}
+impl<T> Vectorize for Vec<T> 
+    where T: Vectorize {
+        fn vec(self) -> Vec<String> {
+            let mut r: Vec<String> = Vec::new();
+            for c in self {
+                r.extend(c.vec());
+            }
+            return r;
+        }
+    }
+
+impl Vectorize for String {
+    fn vec(self) -> Vec<String> {
+        return vec![self];
+    }
+}
+impl Vectorize for bool {
+    fn vec(self) -> Vec<String> {
+        return vec![self.to_string()];
+    }
+}
+impl Vectorize for PathBuf {
+    fn vec(self) -> Vec<String> {
+        return vec![self.display().to_string()];
+    }
+}
+
+#[derive(Clone)]
 pub enum SourceFormatter {
     /// No formatting
     Default,
     /// Filter in only certain elements, placeholder for now
     Filter,
 }
-
+#[derive(Clone)]
 pub enum DefaultValue {
     /// CANNOT be ommited
     Mandatory, 
     /// Just forgedaboutit
     Skip,
     /// provide a default. This default is constant! may provide a formatter later lol
-    Default(&'static str),
+    Default(Argument),
 }
 
+#[derive(Clone)]
 pub struct Entry {
     pub defaults_to: DefaultValue,
     pub source: SourceFormatter,
@@ -264,30 +313,59 @@ impl TryFrom<&str> for Entry {
     }
 }
 
-pub trait Conformable<U> {
-    /// Takes a full entry, calls generate, then makes the defaults_to checks. Obviously may fail
-    fn conform(&self) -> String;
-    /// Takes a full entry, and runs the string transform, then prepends the name.
-    fn generate(&self, with: U) -> Option<String>;
-    /// Proceeds through the full transform, filling the entry, then calling conform.
-    ///   Processes collection arguments separately(?).
-    fn transform(&self) -> Vec<String>;
+pub trait Transformable<U> {
+    /// Takes an empty entry and fills it.
+    fn fill(&mut self, with: &U);
+    /// Makes conformity checks.
+    fn conform(self) -> Vec<String>;
+    /// Generates the entry.
+    fn generate(self) -> Vec<String>;
+    /// The full transform
+    fn transform(self, with: &U) -> Vec<String>;
 }
-impl Conformable<Argument> for Entry {
-    fn conform(&self) -> String {
-        todo!()
-        //return self.target_name
+impl<U> Transformable<U> for Entry
+where Argument: Transform<U> {
+    fn fill(&mut self, with: &U) {
+        self.target_type.transform(with);
     }
-    fn generate(&self, with: Argument) -> Option<String> {
-        
-        todo!()
+    fn generate(self) -> Vec<String> {
+        return self.target_type.generate();
     }
-    fn transform(&self) -> Vec<String> {
-        todo!()
+    fn conform(self) -> Vec<String> {
+        let mut replacement = self.clone();
+        match &replacement.defaults_to {
+            DefaultValue::Skip => return self.generate(),
+            DefaultValue::Mandatory => {
+                let e = self.generate();
+                if e.len() == 0 {
+                    panic!("Mandatory argument was not filled");
+                } else {
+                    return e;
+                }
+            }
+            DefaultValue::Default(x) => {
+                let e = self.generate();
+                if e.len() == 0 {
+                    replacement.target_type = x.clone();
+                    return replacement.generate();
+                } else {
+                    return e;
+                }
+            }
+        }
+    }
+    fn transform(mut self, with: &U) -> Vec<String> {
+        self.fill(with);
+
+        let n = self.target_name.clone();
+        let q = self.conform();
+        return n.name(q);
     }
 }
 
 pub trait Convertible<T> {
+    /// Polulate entry with clap data, returns the ordered entry bundle
+    fn populate(&self, with: T) -> BTreeSet<Entry>;
     /// Takes clap data, and converts it to a command string.
     fn generate(&self, with: T) -> Vec<String>;
 }
