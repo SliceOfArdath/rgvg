@@ -61,8 +61,8 @@ fn rc<'a>(cap: &Option<regex::Match<'a>>) -> &'a str {
 }
 
 fn main() {
-    let r = Regex::new(r"((?P<n1>#\d{1,3})|(?P<n2>-\pL)|(?P<n3>--\pL+))((?P<d1>!)|(?P<d2><[\pL-]*>)|(?P<d3>))(?P<s>\{\pL+\})((?P<t1>\[\pL+\])|(?P<t2>))").unwrap();
-    let text = "#1<->{path}[path] -i{casei}  #0!{pattern}[str] --estrogen{estr}[int]";
+    let r = Regex::new(r"((?P<n1>#\d{1,3})|(?P<n2>-\pL)|(?P<n3>--\pL+))((?P<d1>!)|(?P<d2><[\pL-]*\[\pL*\]>)|(?P<d3>))(?P<s>\{\pL+\})((?P<t1>\[\pL+\])|(?P<t2>))").unwrap();
+    let text = "#1<-[str]>{path}[path] -i{casei}  #0!{pattern}[str] --estrogen{estr}[int]";
     for cap in r.captures_iter(text) {
         println!("{}{}{} {}{}{} {} {}{}", 
             rc(&cap.name("n1")), 
@@ -71,12 +71,14 @@ fn main() {
             rc(&cap.name("d1")), 
             rc(&cap.name("d2")),
             rc(&cap.name("d3")),
-            rc(&cap.name("s")),
+            rc(&cap.name("s") ),
             rc(&cap.name("t1")),
             rc(&cap.name("t2")));
     }
     let args = command::Args::parse();
     println!("{:?}", args);
-    let q = command::tools::GREP.generate(args);
+    let q = command::tools::GREP.clone().populate(args);
     println!("{:?}", q);
+    let p = command::tools::Grepper::generate(q);
+    println!("{:?}", p);
 }

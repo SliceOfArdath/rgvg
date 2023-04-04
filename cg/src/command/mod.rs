@@ -13,4 +13,7 @@ pub struct Args {
     /// The file or directory to search.
     #[arg(value_name="PATH")]
     file: Option<PathBuf>,
+    /// Case insensitive mode
+    #[arg(short='i')]
+    casei: bool,
 }

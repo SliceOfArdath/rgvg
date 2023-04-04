@@ -9,6 +9,8 @@ pub struct Grepper {
     regex_pattern: Entry,
     /// A file or directory to search. Directories may be searched recursively.
     file: Entry,
+    /// Case sensitivity flag
+    casei: Entry,
 }
 
 pub const GREP: Grepper = Grepper {
@@ -24,6 +26,12 @@ pub const GREP: Grepper = Grepper {
         target_name: Name::Blank(1),
         target_type: Argument::PathPattern(None),
     },
+    casei: Entry::ignore(),/*{
+        defaults_to: DefaultValue::Skip,
+        source: SourceFormatter::Default,
+        target_name: Name::Short('i'),
+        target_type: Argument::BooleanFlag(None),
+    }*/
 };
 
 impl Convertible<Args> for Grepper {
@@ -38,14 +46,23 @@ impl Convertible<Args> for Grepper {
     ///     then throw all the non-ordered ones after.
     ///   To optimize the whole thing, we generate the arguments in the same time;
     ///     throw the non-positionals in a vec, and the positionals in a tree. 
-    fn populate(&self, with: Args) -> BTreeSet<Entry> {
-        return BTreeSet::new();
+    fn populate(&mut self, with: Args) -> BTreeSet<Entry> {
+        let mut r: BTreeSet<Entry> = BTreeSet::new();
+        self.regex_pattern.fill(&with.regex_pattern);
+        self.file.fill(&with.file);
+        self.casei.fill(&with.casei);
+        r.insert(self.regex_pattern.clone());
+        r.insert(self.file.clone());
+        r.insert(self.casei.clone());
+
+        return r;
     }
-    fn generate(&self, with: Args) -> Vec<String> {
+    fn generate(with: BTreeSet<Entry>) -> Vec<String> {
         let mut r: Vec<String> = Vec::new();
 
-        r.extend(self.regex_pattern.clone().transform(&with.regex_pattern));
-        r.extend(self.file.clone().transform(&with.file));
+        for i in with {
+            r.extend(i.transform());
+        }
         return r;
     }
 }

@@ -5,7 +5,7 @@ use regex::Regex;
 
 type Index = u8;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// A name of the form -<short> or --<long>. The name sent as a command. Short and long as thus mutually excusive here.
 pub enum Name {
     /// A short name, format -<short>, i.e. -j
@@ -29,7 +29,7 @@ impl Display for Name {
         match self {
             Name::Short(c) => write!(f, "-{}", c),
             Name::Long(s) => write!(f, "--{}", s),
-            Name::Blank(_) => fmt::Result::Ok(()), //We do not process the index yet.
+            Name::Blank(_) => fmt::Result::Ok(()), //Nothing displayed!
             _ => panic!("Unsupported name type!"),
         }
     }
@@ -46,14 +46,6 @@ impl TryFrom<(regex::Match<'_>, &str)> for Name {
         } 
     }
 }
-impl Name {
-    fn name(&self, v: Vec<String>) -> Vec<String> {
-        match self {
-            Name::Blank(_) => v,
-            _ => panic!("Unsupported conversion!"),
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub enum Argument {
@@ -67,15 +59,26 @@ pub enum Argument {
     Text(Option<String>),
     /// Either there or not.. What do the stars say, my dear pippin, what do they say? - That we fight the good cause, merry. That we will see each other in the end.
     BooleanFlag(Option<bool>),
-
+    /// Nothing
+    Empty(Option<()>),
 }
-
 trait Transform<T> {
     fn transform(&mut self, value: &T);
 }
-trait Generate {
+pub trait Generate {
     /// Vec and not option, because of collection arguments.
     fn generate(self) -> Vec<String>;
+}
+
+/// All the From<T> for argument help implement default value conversion. they are, in no way, needed.
+impl From<DefaultValue> for Argument {
+    fn from(value: DefaultValue) -> Self {
+        match value {
+            DefaultValue::Skip => Argument::Empty(Some(())),
+            DefaultValue::Default(x) => x,
+            DefaultValue::Mandatory => Argument::Empty(None), 
+        }
+    }
 }
 
 impl From<String> for Argument {
@@ -94,10 +97,24 @@ impl From<&'static str> for Argument {
     }
 }
 
+/*impl<T> Transform<Option<T>> for Argument
+where Argument: Transform<T> {
+    fn transform(&mut self, value: &Option<T>) {
+        match  {
+            
+        }
+    }
+}*/
+
+/// Transform functions are the obligatory path from raw clap data into arguments.
+/// To implement Transform<T> for a new T, you need to implement the transform function. 
+///   That is, provide a match against all valid transformation fields, to cast into self.
+///   You should always provide a case to cast into empty. Thankfully, that cast is always the same.
 impl Transform<String> for Argument {
     fn transform(&mut self, value: &String) {
         match self {
             Argument::Text(x) => {*x = Some(value.to_string())},
+            Argument::Empty(x) => {*x = Some(())}
             _ => panic!("Unspported transformation!")
         }
     }
@@ -107,6 +124,7 @@ impl Transform<PathBuf> for Argument {
         match self {
             Argument::PathPattern(x) => {*x = Some(value.to_path_buf())},
             Argument::Text(x) => {*x = Some(value.display().to_string())},
+            Argument::Empty(x) => {*x = Some(())}
             _ => panic!("Unspported transformation!")
         }
     }
@@ -116,10 +134,12 @@ impl Transform<bool> for Argument {
         match self {
             Argument::BooleanFlag(x) => {*x = Some(*value)},
             Argument::Text(x) => {*x = Some(value.to_string())},
+            Argument::Empty(x) => {*x = Some(())}
             _ => panic!("Unspported transformation!")
         }
     }
 }
+
 impl Transform<Option<PathBuf>> for Argument {
     fn transform(&mut self, value: &Option<PathBuf>) {
         match self {
@@ -131,18 +151,20 @@ impl Transform<Option<PathBuf>> for Argument {
                 Some(p) => {*x = Some(p.display().to_string())},
                 None => {*x = None},
             },
+            Argument::Empty(x) => {*x = Some(())}
             _ => panic!("Unspported transformation!")
         }
     }
 }
 
 
-impl Generate for Argument {
+impl Generate for Entry {
     fn generate(self) -> Vec<String> {
-        match self {
-            Argument::BooleanFlag(x) => optional_vectorization(x),
-            Argument::Text(x) => optional_vectorization(x), //that's a string!
-            Argument::PathPattern(x) => optional_vectorization(x),
+        match self.target_type {
+            Argument::BooleanFlag(x) => optional_vectorization(x, &self.target_name, &self.defaults_to.into()),
+            Argument::Text(x) => optional_vectorization(x, &self.target_name, &self.defaults_to.into()),
+            Argument::PathPattern(x) => optional_vectorization(x, &self.target_name, &self.defaults_to.into()),
+            Argument::Empty(x) => optional_vectorization(x, &self.target_name, &self.defaults_to.into()),
             _ => panic!("Unsupported type: {:?}", self),
         }
     }
@@ -150,49 +172,70 @@ impl Generate for Argument {
 
 trait Vectorize
     where Self: Sized {
-    fn vec(self) -> Vec<String>;
+    fn vec(self, name: &Name) -> Vec<String>; //
 }
-fn optional_vectorization<T: Vectorize>(v: Option<T>) -> Vec<String> {
+fn optional_vectorization<T: Vectorize>(v: Option<T>, name: &Name, defaults: &Argument) -> Vec<String> {
     match v {
-        Some(n) => n.vec(),
-        None => Vec::new(),
+        Some(n) => n.vec(name),
+        None => match defaults {
+            Argument::Empty(Some(())) => Vec::new(), //Skipped
+            Argument::Empty(None) => panic!("Mandatory argument {} was not provided", name),
+            _ => Entry {
+                defaults_to: DefaultValue::Mandatory,
+                source: SourceFormatter::Default,
+                target_name: name.clone(),
+                target_type: defaults.clone(),
+            }.generate(),
+        },
     }
 }
 impl<T> Vectorize for Vec<T> 
     where T: Vectorize {
-        fn vec(self) -> Vec<String> {
+        fn vec(self, name: &Name) -> Vec<String> { //, name: Name, defaults: DefaultValue
             let mut r: Vec<String> = Vec::new();
             for c in self {
-                r.extend(c.vec());
+                r.extend(c.vec(name));
             }
             return r;
         }
     }
 
 impl Vectorize for String {
-    fn vec(self) -> Vec<String> {
+    fn vec(self, name: &Name) -> Vec<String> {
         return vec![self];
     }
 }
 impl Vectorize for bool {
-    fn vec(self) -> Vec<String> {
-        return vec![self.to_string()];
+    fn vec(self, name: &Name) -> Vec<String> {
+        let n = name.to_string();
+        if n == "" { //Named as a positional argument, which is, bad!
+            panic!("Boolean type was used for positional argument, impossible to generate.");
+        }
+        match self {
+            true => vec![n],
+            false => vec![],
+        }
     }
 }
 impl Vectorize for PathBuf {
-    fn vec(self) -> Vec<String> {
+    fn vec(self, name: &Name) -> Vec<String> {
         return vec![self.display().to_string()];
     }
 }
+impl Vectorize for () {
+    fn vec(self, _name: &Name) -> Vec<String> {
+        return vec![];
+    }
+}
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum SourceFormatter {
     /// No formatting
     Default,
     /// Filter in only certain elements, placeholder for now
     Filter,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum DefaultValue {
     /// CANNOT be ommited
     Mandatory, 
@@ -202,7 +245,7 @@ pub enum DefaultValue {
     Default(Argument),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Entry {
     pub defaults_to: DefaultValue,
     pub source: SourceFormatter,
@@ -239,6 +282,7 @@ impl PartialEq for Entry {
         }
     }
 }
+impl Eq for Entry {}
 impl PartialOrd for Entry {
     /// Conventional order: command <blanks> -<shorts> --<longs>. Why? good question.
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
@@ -248,21 +292,53 @@ impl PartialOrd for Entry {
                 Name::Blank(j) => i.partial_cmp(j),
                 Name::Long(_) => Some(std::cmp::Ordering::Less),
                 Name::Short(_) => Some(std::cmp::Ordering::Less),
-                _ => panic!("Invalid entry!"),
+                _ => None,
             },
             Name::Long(s) => match &other.target_name {
                 Name::Blank(_) => Some(std::cmp::Ordering::Greater),
                 Name::Long(t) => s.partial_cmp(t),
                 Name::Short(_) => Some(std::cmp::Ordering::Greater),
-                _ => panic!("Invalid entry!"),
+                _ => None,
             },
             Name::Short(c) => match &other.target_name {
                 Name::Blank(_) => Some(std::cmp::Ordering::Greater),
                 Name::Long(_) => Some(std::cmp::Ordering::Less),
                 Name::Short(d) => c.partial_cmp(d),
-                _ => panic!("Invalid entry!"),
+                _ => None,
             },
-            _ => panic!("Invalid entry!"),
+            _ => None,
+        }
+    }
+}
+impl Ord for Entry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        //We treat undefined like infinity. It's not a problem if they are equal then, as we expect undefined to get ignored.
+        //! THis implementation poses a problem for argument joining! to keep in mind.
+        match &self.target_name {
+            Name::Blank(i) => match &other.target_name {
+                Name::Blank(j) => i.cmp(j),
+                Name::Long(_) => std::cmp::Ordering::Less,
+                Name::Short(_) => std::cmp::Ordering::Less,
+                Name::Undefined => std::cmp::Ordering::Less,
+            },
+            Name::Long(s) => match &other.target_name {
+                Name::Blank(_) => std::cmp::Ordering::Greater,
+                Name::Long(t) => s.cmp(t),
+                Name::Short(_) => std::cmp::Ordering::Greater,
+                Name::Undefined => std::cmp::Ordering::Less,
+            },
+            Name::Short(c) => match &other.target_name {
+                Name::Blank(_) => std::cmp::Ordering::Greater,
+                Name::Long(_) => std::cmp::Ordering::Less,
+                Name::Short(d) => c.cmp(d),
+                Name::Undefined => std::cmp::Ordering::Less,
+            },
+            Name::Undefined => match &other.target_name {
+                Name::Blank(_) => std::cmp::Ordering::Greater,
+                Name::Long(_) => std::cmp::Ordering::Greater,
+                Name::Short(_) => std::cmp::Ordering::Greater,
+                Name::Undefined => std::cmp::Ordering::Equal,
+            },
         }
     }
 }
@@ -316,22 +392,14 @@ impl TryFrom<&str> for Entry {
 pub trait Transformable<U> {
     /// Takes an empty entry and fills it.
     fn fill(&mut self, with: &U);
-    /// Makes conformity checks.
-    fn conform(self) -> Vec<String>;
-    /// Generates the entry.
-    fn generate(self) -> Vec<String>;
-    /// The full transform
-    fn transform(self, with: &U) -> Vec<String>;
+
 }
 impl<U> Transformable<U> for Entry
 where Argument: Transform<U> {
     fn fill(&mut self, with: &U) {
         self.target_type.transform(with);
     }
-    fn generate(self) -> Vec<String> {
-        return self.target_type.generate();
-    }
-    fn conform(self) -> Vec<String> {
+    /*fn conform(self) -> Vec<String> {
         let mut replacement = self.clone();
         match &replacement.defaults_to {
             DefaultValue::Skip => return self.generate(),
@@ -353,19 +421,26 @@ where Argument: Transform<U> {
                 }
             }
         }
-    }
-    fn transform(mut self, with: &U) -> Vec<String> {
-        self.fill(with);
+    }*/
+}
 
-        let n = self.target_name.clone();
-        let q = self.conform();
-        return n.name(q);
+impl Entry {
+    pub const fn ignore() -> Self {
+        return Entry {
+            defaults_to: DefaultValue::Skip,
+            source: SourceFormatter::Default,
+            target_name: Name::Undefined,
+            target_type: Argument::Empty(None),
+        };
+    }
+    pub fn transform(self) -> Vec<String> {
+        return self.generate();
     }
 }
 
 pub trait Convertible<T> {
     /// Polulate entry with clap data, returns the ordered entry bundle
-    fn populate(&self, with: T) -> BTreeSet<Entry>;
+    fn populate(&mut self, with: T) -> BTreeSet<Entry>;
     /// Takes clap data, and converts it to a command string.
-    fn generate(&self, with: T) -> Vec<String>;
+    fn generate(with: BTreeSet<Entry>) -> Vec<String>;
 }
